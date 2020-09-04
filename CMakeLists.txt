@@ -32,7 +32,7 @@ SET(CUDA_SEPARABLE_COMPILATION ON)
 find_package(CUDA)
 if(CUDA_FOUND)
     add_definitions(-D_USE_CUDA)
-    message(STATUS "Found CUDA - the GPU code will be compiled.")
+    message(STATUS "Found CUDA ${CUDA_VERSION_STRING} - the GPU code will be compiled.")
 else(CUDA_FOUND)
     message(FATAL_ERROR "CUDA not found. Please turn the USE_CUDA flag off.")
 endif(CUDA_FOUND)
@@ -42,10 +42,8 @@ set (CUDA_PROPAGATE_HOST_FLAGS ON)
 
 list(APPEND CUDA_NVCC_FLAGS -Xcompiler -fopenmp)
 
-#set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -G -g -O0 --relocatable-device-code=false -gencode arch=compute_75,code=compute_75 -gencode arch=compute_75,code=sm_75 --expt-relaxed-constexpr)
-# -res-usage -maxrregcount 128
-# -gencode arch=compute_75,code=compute_75 -gencode arch=compute_75,code=sm_75
-set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -O3 -lineinfo -keep -src-in-ptx --relocatable-device-code=false -gencode arch=compute_75,code=compute_75 -gencode arch=compute_75,code=sm_75 --expt-relaxed-constexpr)
+#set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -G -g -O0 --relocatable-device-code=true -gencode arch=compute_75,code=compute_75 -gencode arch=compute_75,code=sm_75 --expt-relaxed-constexpr)
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -O3 --relocatable-device-code=true -gencode arch=compute_75,code=compute_75 -gencode arch=compute_75,code=sm_75 --expt-relaxed-constexpr)
 
 include_directories( ${CMAKE_SOURCE_DIR}/external )
 

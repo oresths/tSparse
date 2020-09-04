@@ -19,11 +19,6 @@
 
 #define BMP_DIM 8U //The dimension of the bitmap block
 
-// Reading or writing to TCUs, although the pattern is theoretically unknown, leads to bank conflicts. To avoid
-// them we pad. But reading/writing to fragments needs 128-bit alignment, so the minimum padding is 8 halfs.
-#define PAD_HALF 8
-#define PAD_FLOAT 4
-
 #define WARPS_BLOCK 2 //warps per block
 #define TILES_WARP 2 //tiles per warp
 #define TILES_BLOCK (WARPS_BLOCK * TILES_WARP) //tiles per block
@@ -38,12 +33,6 @@
 // Also CUSP has memory problems with more than 1 repetitions
 #define REPETITIONS 1
 
-//Set to 1 to try bringing out of fp16 range matrices in the fp16 range. Scaling keeps positive definiteness and
-//we can scale the output to its original range losslessly. Not sure if useful.
-#define SCALE 0
-
-//#define USE_NVTX // Enable, disable profiler markers
-
 
 #define gpuErrchk(ans) { gpuAssert((ans), #ans, __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, char const *const source, const char *file, int line, bool abort=true)
@@ -57,30 +46,6 @@ inline void gpuAssert(cudaError_t code, char const *const source, const char *fi
         }
     }
 }
-
-#ifdef USE_NVTX
-#include "nvtx3/nvToolsExt.h"
-
-const uint32_t colors[] = { 0xff00ff00, 0xff0000ff, 0xffffff00, 0xffff00ff, 0xff00ffff, 0xffff0000, 0xffffffff };
-const int num_colors = sizeof(colors)/sizeof(uint32_t);
-
-#define PUSH_RANGE(name,cid) { \
-    int color_id = cid; \
-    color_id = color_id%num_colors;\
-    nvtxEventAttributes_t eventAttrib = {0}; \
-    eventAttrib.version = NVTX_VERSION; \
-    eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
-    eventAttrib.colorType = NVTX_COLOR_ARGB; \
-    eventAttrib.color = colors[color_id]; \
-    eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
-    eventAttrib.message.ascii = name; \
-    nvtxRangePushEx(&eventAttrib); \
-}
-#define POP_RANGE nvtxRangePop();
-#else
-#define PUSH_RANGE(name,cid)
-#define POP_RANGE
-#endif
 
 
 using IndexTypeH = int;  //indices

@@ -1,12 +1,17 @@
 # Accelerating Sparse Matrix-Matrix Multiplication with GPU Tensor Cores
-In this repository we provide the source code of our accelerated Sparse Matrix-Matrix multiplication (SpGEMM) implementations, which we desrcribe in our paper "Accelerating Sparse Matrix-Matrix Multiplication with GPU Tensor Cores" (under revision).
+In this repository we provide the source code of our accelerated Sparse Matrix-Matrix multiplication (SpGEMM) implementations, which we desrcribe in our paper "Accelerating Sparse Matrix-Matrix Multiplication with GPU Tensor Cores" (proofreading).
 
 ## How to build
-Cmake, CUDA and CUSP are required. Modification to the CMakeLists.txt files may be necessary, e.g. to change GPU architecture. Call cmake like this:
+Cmake, CUDA and CUSP are required. Modification to the CMakeLists.txt files may be necessary, e.g. to change GPU architecture.
 
-"cmake ../spmm-src"
+Instructions:
+1. Download the source code into a folder e.g. tSparse-src.
+2. Create a folder for building the executable in the same directory as tSparse-src, e.g tSparse-release.
+3. Go inside tSparse-release and call cmake like this:
 
-Then call make:
+"cmake ../tSparse-src"
+
+4. Finally call make:
 
 "make -j{number of CPU cores}
 
@@ -19,8 +24,9 @@ or
 ./spmm A.mtx B.mtx
 
 ## Troubleshooting
-The first compilation after running cmake may give an error similar to : "error: undefined reference to '__cudaRegisterLinkedBinary_12_spmm_cpp1_ii_handle'". This error is related to the CUDA library that is used by CUDA dynamic parallelism.
+- The first compilation after running cmake may give an error similar to : "error: undefined reference to '__cudaRegisterLinkedBinary_12_spmm_cpp1_ii_handle'". This error is related to the CUDA library that is used by CUDA dynamic parallelism.
 Running make a second time solves this issue.
+- The latest multiplication and counting kernels do not support Volta. The reason is that we use direct access to fragments (instead of through shared memory) for performance reasons.
 
 ## Contact data
 Orestis Zachariadis (orestis.zachariadis@uco.es)

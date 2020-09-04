@@ -33,7 +33,7 @@ void show_d(T *arr_d, int n, std::string prompt);
 
 
 template<class K, class T>
-int bb_segsort(K *keys_d, T *vals_d, int n,  int *d_segs, int length)
+int bb_segsort(K *keys_d, T *vals_d, int n,  int *d_segs, int length, K *keysB_d, T *valsB_d)
 {
     cudaError_t cuda_err;
     int *h_bin_counter = new int[SEGBIN_NUM];
@@ -48,12 +48,12 @@ int bb_segsort(K *keys_d, T *vals_d, int n,  int *d_segs, int length)
     cuda_err = cudaMemset(d_bin_counter, 0, SEGBIN_NUM * sizeof(int));
     CUDA_CHECK(cuda_err, "memset d_bin_counter");
 
-    K *keysB_d;
-    T *valsB_d;
-    cuda_err = cudaMalloc((void **)&keysB_d, n * sizeof(K));
-    CUDA_CHECK(cuda_err, "alloc keysB_d");
-    cuda_err = cudaMalloc((void **)&valsB_d, n * sizeof(T));
-    CUDA_CHECK(cuda_err, "alloc valsB_d");
+//    K *keysB_d; //modified line
+//    T *valsB_d; //modified line
+//    cuda_err = cudaMalloc((void **)&keysB_d, n * sizeof(K)); //modified line
+//    CUDA_CHECK(cuda_err, "alloc keysB_d"); //modified line
+//    cuda_err = cudaMalloc((void **)&valsB_d, n * sizeof(T)); //modified line
+//    CUDA_CHECK(cuda_err, "alloc valsB_d"); //modified line
 
     bb_bin(d_bin_segs_id, d_bin_counter, d_segs, length, n, h_bin_counter);
 
@@ -181,10 +181,10 @@ int bb_segsort(K *keys_d, T *vals_d, int n,  int *d_segs, int length)
     CUDA_CHECK(cuda_err, "free d_bin_counter");
     cuda_err = cudaFree(d_bin_segs_id);
     CUDA_CHECK(cuda_err, "free d_bin_segs_id");
-    cuda_err = cudaFree(keysB_d);
-    CUDA_CHECK(cuda_err, "free keysB");
-    cuda_err = cudaFree(valsB_d);
-    CUDA_CHECK(cuda_err, "free valsB");
+//    cuda_err = cudaFree(keysB_d); //modified line
+//    CUDA_CHECK(cuda_err, "free keysB"); //modified line
+//    cuda_err = cudaFree(valsB_d); //modified line
+//    CUDA_CHECK(cuda_err, "free valsB"); //modified line
 
     for (int i = 0; i < SEGBIN_NUM - 1; i++) cudaStreamDestroy(streams[i]);
     delete[] h_bin_counter;

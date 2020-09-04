@@ -39,7 +39,6 @@
 
 #include "mm.h"
 
-
 cusparseStatus_t status;
 cusparseHandle_t handle  = 0;
 cusparseMatDescr_t descrA = 0;
@@ -58,13 +57,6 @@ do {                                                 \
     fflush (stdout);                                 \
 } while (0)
 
-__global__ void debug_kernelS(int * test){
-    int tid = blockIdx.x*blockDim.x + threadIdx.x;
-
-    if (tid==0){
-        printf("%d\n", test[0]);
-    }
-}
 
 __global__ void warmup(float4 *output)
 {
@@ -196,21 +188,22 @@ struct absolute
   }
 };
 
-struct bmp_popcount
+struct bmp_popcount_d
 {
     using UnsignedIndexType = uint32_t;
     using BMPType = uint64_t;
 
-  __host__ __device__
+  __device__
   UnsignedIndexType operator()(BMPType rhs)
   {
-      return (UnsignedIndexType) __builtin_popcountl(rhs); //TODO not GPU compatible
+      return (UnsignedIndexType) __popcll(rhs); //TODO not GPU compatible
   }
 };
 
-int coo2bmp_noTuple(const cusp::coo_matrix<int, float, cusp::host_memory>& in,
-    cusp::coo_matrix<int, uint64_t, cusp::host_memory>& out,
-    thrust::host_vector<float>& elems, thrust::host_vector<uint32_t>& idx) {
+
+int coo2bmp_noTuple_d(const cusp::coo_matrix<int, float, cusp::device_memory>& in,
+    cusp::coo_matrix<int, uint64_t, cusp::device_memory>& out,
+    thrust::device_vector<float>& elems, thrust::device_vector<uint32_t>& idx) {
 
     using IndexType = int;
     using ElemIndexType = uint32_t;
@@ -224,20 +217,22 @@ int coo2bmp_noTuple(const cusp::coo_matrix<int, float, cusp::host_memory>& in,
     using COOHost =    cusp::coo_matrix<IndexType,ValueType,cusp::host_memory>;
     using COODev =     cusp::coo_matrix<IndexType,ValueType,cusp::device_memory>;
 
-    COOHost in_copy(in);
+    auto exec = thrust::cuda::par;
+
+    COODev in_copy(in);
 
     // sort COO first, it is needed for elem_array. The COO matrix gets sorted by row, and each row by column.
-    thrust::sort_by_key(in_copy.column_indices.begin(), in_copy.column_indices.end(), thrust::make_zip_iterator(
+    thrust::sort_by_key(exec, in_copy.column_indices.begin(), in_copy.column_indices.end(), thrust::make_zip_iterator(
             thrust::make_tuple(in_copy.row_indices.begin(), in_copy.values.begin())));
-    thrust::stable_sort_by_key(in_copy.row_indices.begin(), in_copy.row_indices.end(), thrust::make_zip_iterator(
+    thrust::stable_sort_by_key(exec, in_copy.row_indices.begin(), in_copy.row_indices.end(), thrust::make_zip_iterator(
             thrust::make_tuple(in_copy.column_indices.begin(), in_copy.values.begin())));
 
-    thrust::host_vector<LongIndexType> tile_indices(in_copy.num_entries); //Absolute index of the tile each element belongs to
-    thrust::host_vector<BMPType> position(in_copy.num_entries); //Absolute index of each element inside respective tile (1<<index)
+    thrust::device_vector<LongIndexType> tile_indices(in_copy.num_entries); //Absolute index of the tile each element belongs to
+    thrust::device_vector<BMPType> position(in_copy.num_entries); //Absolute index of each element inside respective tile (1<<index)
 
     // Finds 2 things. a) In which tile each element belongs. Tile is returned with absolute indexing. b) What is the
     // position of each element in the respective tile. The position is returned with absolute indexing.
-    thrust::for_each(
+    thrust::for_each(exec,
             thrust::make_zip_iterator(
                     thrust::make_tuple(in_copy.row_indices.begin(), in_copy.column_indices.begin(), tile_indices.begin(),
                             position.begin())),
@@ -248,19 +243,19 @@ int coo2bmp_noTuple(const cusp::coo_matrix<int, float, cusp::host_memory>& in,
     // Sort row_indices, col_indices, values and positions in tile by the absolute index of the tile. The sort is stable
     // in order to keep the order of values (elements). The values are expected to come from a COO matrix that has the
     // rows ordered and the columns of each row ordered.
-    thrust::stable_sort_by_key(tile_indices.begin(), tile_indices.end(),
+    thrust::stable_sort_by_key(exec, tile_indices.begin(), tile_indices.end(),
             thrust::make_zip_iterator(
                     thrust::make_tuple(in_copy.row_indices.begin(), in_copy.column_indices.begin(), in_copy.values.begin(),
                             position.begin())));
 
-    thrust::host_vector<LongIndexType> tile_indices_unique(in_copy.num_entries); //Unique absolute indices of tiles
-    thrust::host_vector<BMPType> bmp(in_copy.num_entries);
+    thrust::device_vector<LongIndexType> tile_indices_unique(in_copy.num_entries); //Unique absolute indices of tiles
+    thrust::device_vector<BMPType> bmp(in_copy.num_entries);
 
     thrust::equal_to<UnsignedIndexType> binary_pred;
     thrust::bit_or<BMPType> binary_op;
     // Elements are reduced based on the index of the tile they belong to. This function returns the unique tile indices and the
     // the result of reduction is the total bmp of all elements that belong to the same tile.
-    auto new_end = thrust::reduce_by_key(tile_indices.begin(), tile_indices.end(), position.begin(), tile_indices_unique.begin(),
+    auto new_end = thrust::reduce_by_key(exec, tile_indices.begin(), tile_indices.end(), position.begin(), tile_indices_unique.begin(),
             bmp.begin(), binary_pred, binary_op);
 
     UnsignedIndexType num_of_tiles = new_end.first - tile_indices_unique.begin();
@@ -268,10 +263,10 @@ int coo2bmp_noTuple(const cusp::coo_matrix<int, float, cusp::host_memory>& in,
     idx.resize(num_of_tiles);
 
     // transform BMP to population counts
-    thrust::transform(bmp.begin(), new_end.second, idx.begin(), bmp_popcount());
+    thrust::transform(exec, bmp.begin(), new_end.second, idx.begin(), bmp_popcount_d());
 
     // convert population counts to offsets
-    thrust::exclusive_scan(idx.begin(), idx.end(), idx.begin(), UnsignedIndexType(0));
+    thrust::exclusive_scan(exec, idx.begin(), idx.end(), idx.begin(), UnsignedIndexType(0));
 
     out.num_rows = in_copy.num_rows / BMP_DIM  + ((in_copy.num_rows % BMP_DIM)?1:0) ;
     out.num_cols = in_copy.num_cols / BMP_DIM  + ((in_copy.num_cols % BMP_DIM)?1:0) ;
@@ -279,7 +274,7 @@ int coo2bmp_noTuple(const cusp::coo_matrix<int, float, cusp::host_memory>& in,
     out.resize(out.num_rows, out.num_cols, out.num_entries);
 
     // Convert absolute tile indices to relative indexing, to be stored in the COO matrix of the output
-    thrust::for_each(
+    thrust::for_each(exec,
             thrust::make_zip_iterator(
                     thrust::make_tuple(tile_indices_unique.begin(), out.row_indices.begin(), out.column_indices.begin())),
             thrust::make_zip_iterator(
@@ -294,7 +289,8 @@ int coo2bmp_noTuple(const cusp::coo_matrix<int, float, cusp::host_memory>& in,
     return 1;
 }
 
-struct write_values_noTuple
+
+struct write_values_noTuple_d
 {
     using IndexType = int;
     using ElemIndexType = uint32_t;
@@ -302,15 +298,19 @@ struct write_values_noTuple
     using BMPType = uint64_t;
     using ValueType = float;
     using ValueTypeBMP = uint64_t;
-    using COOHost =    cusp::coo_matrix<IndexType,ValueType,cusp::host_memory>;
-    using ElementVector = thrust::host_vector<ValueType>;
+    using COODev =    cusp::coo_matrix<IndexType,ValueType,cusp::device_memory>;
+    using ElementVector = thrust::device_vector<ValueType>;
 
-    ElementVector & elems_;
-    COOHost & out_;
+    ValueType * elems_;
+    IndexType * row_indices_;
+    IndexType * column_indices_;
+    ValueType * values_;
 
-    write_values_noTuple(ElementVector & elems, COOHost & out): elems_(elems), out_(out) {}
+    write_values_noTuple_d(ValueType * elems, IndexType * row_indices, IndexType * column_indices, ValueType * values) :
+            elems_(elems), row_indices_(row_indices), column_indices_(column_indices), values_(values) {
+    }
 
-    __host__
+    __device__
     void operator()(
             const thrust::tuple<const IndexType &, const IndexType &, const ValueTypeBMP &, const ElemIndexType &> x) {
 
@@ -319,9 +319,9 @@ struct write_values_noTuple
         uint64_t last_digit = 1;
         for (int i = 0; i < BMP_DIM*BMP_DIM; ++i) {
             if (bmp & last_digit) {
-                out_.row_indices[idx]    = x.get<0>() * BMP_DIM + i / BMP_DIM;
-                out_.column_indices[idx] = x.get<1>() * BMP_DIM + i % BMP_DIM;
-                out_.values[idx] = elems_[idx];
+                row_indices_[idx]    = x.get<0>() * BMP_DIM + i / BMP_DIM;
+                column_indices_[idx] = x.get<1>() * BMP_DIM + i % BMP_DIM;
+                values_[idx] = elems_[idx];
                 idx++;
             }
             bmp >>= 1;
@@ -329,11 +329,12 @@ struct write_values_noTuple
     }
 };
 
+
 // Output matrix should have been sized (num_rows,num_cols,num_entries) before calling this function.
 // num_rows,num_cols should be from the input. num_entries should be the size of the elem array of the result.
-int bmp2coo_noTuple(const cusp::coo_matrix<int, uint64_t, cusp::host_memory>& in,
-        thrust::host_vector<float>& elems, thrust::host_vector<uint32_t>& idx,
-        cusp::coo_matrix<int, float, cusp::host_memory>& out) {
+int bmp2coo_noTuple_d(const cusp::coo_matrix<int, uint64_t, cusp::device_memory>& in,
+        thrust::device_vector<float>& elems, thrust::device_vector<uint32_t>& idx,
+        cusp::coo_matrix<int, float, cusp::device_memory>& out) {
 
     using IndexType = int;
     using ElemIndexType = uint32_t;
@@ -347,13 +348,20 @@ int bmp2coo_noTuple(const cusp::coo_matrix<int, uint64_t, cusp::host_memory>& in
     using COOHost =    cusp::coo_matrix<IndexType,ValueType,cusp::host_memory>;
     using COODev =     cusp::coo_matrix<IndexType,ValueType,cusp::device_memory>;
 
+    auto exec = thrust::cuda::par;
 
-    thrust::for_each(
+    IndexType * raw_out_row_indices =  thrust::raw_pointer_cast(&out.row_indices[0]);
+    IndexType * raw_out_column_indices =  thrust::raw_pointer_cast(&out.column_indices[0]);
+    ValueType * raw_out_tiles =  thrust::raw_pointer_cast(&out.values[0]);
+
+    ValueType *raw_elems = thrust::raw_pointer_cast(&elems[0]);
+
+    thrust::for_each(exec,
             thrust::make_zip_iterator(
                     thrust::make_tuple(in.row_indices.begin(), in.column_indices.begin(), in.values.begin(), idx.begin())),
             thrust::make_zip_iterator(
                     thrust::make_tuple(in.row_indices.end(), in.column_indices.end(), in.values.end(), idx.end())),
-            write_values_noTuple(elems, out));
+            write_values_noTuple_d(raw_elems, raw_out_row_indices, raw_out_column_indices, raw_out_tiles));
 
 
     // sort COO to be CUSP compatible (although not that much sorting is needed).
@@ -471,13 +479,24 @@ struct get_smape
     }
 };
 
+struct bmp_popcount_tuple
+{
+    using UnsignedIndexType = uint32_t;
+    using BMPType = uint64_t;
+
+  __host__ __device__
+  float operator()(const thrust::tuple<const UnsignedIndexType &, const BMPType &> x)
+  {
+      return (float) __builtin_popcountl(x.get<1>()); //TODO not GPU compatible
+  }
+};
 
 struct bmp_popcount_tuple_noTuple
 {
     using UnsignedIndexType = uint32_t;
     using BMPType = uint64_t;
 
-  __host__ __device__
+  __host__
   float operator()(const BMPType & x)
   {
       return (float) __builtin_popcountl(x); //TODO not GPU compatible
@@ -517,11 +536,7 @@ float time_spmmBMP_noTuple(const InputType& A_h, const InputType& B_h)
     unsigned int N = REPETITIONS; //repetitions for timing
 
 
-    COOHostBMP A_BMP_h, B_BMP_h;
     const COOHost A_COO_h(A_h), B_COO_h(B_h);
-    thrust::host_vector<ValueType> A_elems_h, B_elems_h;
-    thrust::host_vector<ElemIndexType> A_idx_h, B_idx_h;
-
 
     uint32_t big_A = thrust::count_if(A_COO_h.values.begin(), A_COO_h.values.end(), greater_equal_absf<float>(HALF_MAX));
     uint32_t big_B = thrust::count_if(B_COO_h.values.begin(), B_COO_h.values.end(), greater_equal_absf<float>(HALF_MAX));
@@ -544,47 +559,48 @@ float time_spmmBMP_noTuple(const InputType& A_h, const InputType& B_h)
         return 9999;
     }
 
-    timespec start, stop;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-    coo2bmp_noTuple(A_COO_h, A_BMP_h, A_elems_h, A_idx_h);
-    coo2bmp_noTuple(B_COO_h, B_BMP_h, B_elems_h, B_idx_h);
-    clock_gettime(CLOCK_MONOTONIC_RAW, &stop);
-    double accum = ( stop.tv_sec - start.tv_sec ) * 1000L + (double)( stop.tv_nsec - start.tv_nsec ) / 1000000L;
-    printf(" COO to bitmap conversion (for both inputs) time: %lfms\n", accum);
-
-    COOHost test_conv(A_COO_h.num_rows, A_COO_h.num_cols, A_elems_h.size());
-    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-    bmp2coo_noTuple(A_BMP_h, A_elems_h, A_idx_h, test_conv);
-    clock_gettime(CLOCK_MONOTONIC_RAW, &stop);
-    accum = ( stop.tv_sec - start.tv_sec ) * 1000L + (double)( stop.tv_nsec - start.tv_nsec ) / 1000000L;
-    printf("Bitmap to COO conversion time x2 (to approximate 2 matrices): %lfms\n", accum*2);
+    COODev A_COO_d(A_COO_h);
+    COODev B_COO_d(B_COO_h);
 
     COODevBMP A_BMP_d;
     COODevBMP B_BMP_d;
-
-    try
-    {
-        A_BMP_d = A_BMP_h;
-        B_BMP_d = B_BMP_h;
-    }
-    catch (cusp::format_conversion_exception)
-    {
-        return -1;
-    }
 
     thrust::device_vector<ValueType> A_elems_d;
     thrust::device_vector<ValueType> B_elems_d;
     thrust::device_vector<ValueType> C_elems_d; //This is initialized inside the multiply routine
 
-    A_elems_d = A_elems_h;
-    B_elems_d = B_elems_h;
-
     thrust::device_vector<ElemIndexType> A_idx_d;
     thrust::device_vector<ElemIndexType> B_idx_d;
     thrust::device_vector<ElemIndexType> C_idx_d; //This is initialized inside the multiply routine
 
-    A_idx_d = A_idx_h;
-    B_idx_d = B_idx_h;
+    timer t_conv;
+    coo2bmp_noTuple_d(A_COO_d, A_BMP_d, A_elems_d, A_idx_d);
+    coo2bmp_noTuple_d(B_COO_d, B_BMP_d, B_elems_d, B_idx_d);
+    float time_conversion = t_conv.milliseconds_elapsed();
+    printf(" COO to bitmap conversion (for both inputs) time: %lfms\n", time_conversion);
+
+#if DEBUG
+    int print_num2 = 100; // How many to print
+
+    std::cout << "A Bmp. ( " << A_BMP_d.num_entries << " )" << std::endl;
+    for (int i = 0; i < (A_BMP_d.num_entries < 100 ? A_BMP_d.num_entries : print_num2 ); ++i) {
+        std::cout << "[" << A_BMP_d.row_indices[i] << ", " << A_BMP_d.column_indices[i] << "]=["
+                << A_idx_d[i] << ", " << A_BMP_d.values[i] << "]  ";
+    }
+    std::cout << std::endl;
+
+    std::cout << "A Bmp elements.";
+    for (int i = 0; i < (A_elems_d.size() < 100 ? A_elems_d.size() : print_num2 ); ++i) {
+        std::cout << A_elems_d[i] << " ";
+    }
+    std::cout << std::endl;
+#endif
+
+    COODev test_conv(A_COO_d.num_rows, A_COO_d.num_cols, A_elems_d.size());
+    timer t_conv_back;
+    bmp2coo_noTuple_d(A_BMP_d, A_elems_d, A_idx_d, test_conv);
+    float time_conversion_back = t_conv_back.milliseconds_elapsed();
+    printf("Bitmap to COO conversion time x2 (to approximate 2 matrices): %lfms\n", time_conversion_back*2);
 
 #if GPU_WARMUP
     float4* preheat;
@@ -646,10 +662,11 @@ float time_spmmBMP_noTuple(const InputType& A_h, const InputType& B_h)
 
     COOHostBMP C_BMP_h(C_BMP_d);
     thrust::host_vector<ValueType> C_elems_h(C_elems_d);
-    thrust::host_vector<ElemIndexType> C_idx_h(C_idx_d);
 
-    COOHost C_ours_h(A_COO_h.num_rows, B_COO_h.num_cols, C_elems_h.size());
-    bmp2coo_noTuple(C_BMP_h, C_elems_h, C_idx_h, C_ours_h);
+    COODev C_ours_d(A_COO_d.num_rows, B_COO_d.num_cols, C_elems_d.size());
+    bmp2coo_noTuple_d(C_BMP_d, C_elems_d, C_idx_d, C_ours_d);
+
+    COOHost C_ours_h(C_ours_d);
 
     printf("Conversion of new from BMP to COO complete\n");
 
@@ -874,6 +891,9 @@ float time_spmmBMP_noTuple(const InputType& A_h, const InputType& B_h)
             << C_bmp_counts_std << std::endl;
 
     /*Bitmap statistics of A*/
+    COOHostBMP A_BMP_h(A_BMP_d);
+    thrust::host_vector<ValueType> A_elems_h(A_elems_d);
+
     thrust::host_vector<float> A_bmp_counts(A_BMP_h.num_entries);
     thrust::transform(A_BMP_h.values.begin(), A_BMP_h.values.end(), A_bmp_counts.begin(), bmp_popcount_tuple_noTuple());
 
@@ -1108,10 +1128,6 @@ int main(int argc, char ** argv)
 
     std::cout << "Input matrix A has shape (" << A.num_rows << "," << A.num_cols << ") and " << A.num_entries << " entries" << "\n";
     std::cout << "             B has shape (" << B.num_rows << "," << B.num_cols << ") and " << B.num_entries << " entries" << "\n\n";
-
-
-    printf("Host Sparse Matrix-Matrix Multiply (milliseconds per multiplication)\n");
-//    printf("CUSP  Host  | %9.2f\n", time_spmm<CSRHost>(A,B));
 
     printf("\n\n");
 
