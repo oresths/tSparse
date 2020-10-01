@@ -1,8 +1,8 @@
 # Accelerating Sparse Matrix-Matrix Multiplication with GPU Tensor Cores
-In this repository we provide the source code of our accelerated Sparse Matrix-Matrix multiplication (SpGEMM) implementation, which we desrcribe in our paper "Accelerating Sparse Matrix-Matrix Multiplication with GPU Tensor Cores" (see references).
+In this repository we provide the source code of our accelerated Sparse Matrix-Matrix multiplication (SpGEMM) implementation, which we desrcribe in "Accelerating Sparse Matrix-Matrix Multiplication with GPU Tensor Cores" [1].
 
 ## How to build
-Cmake, CUDA and CUSP are required. Modification to the CMakeLists.txt files may be necessary, e.g. to change GPU architecture.
+Cmake and CUDA are required. Modification to the CMakeLists.txt files may be necessary, e.g. to change GPU architecture.
 
 Instructions:
 1. Download the source code into a folder e.g. tSparse-src.
@@ -18,9 +18,8 @@ Instructions:
 ## How to run
 In order to test SPGEMM run "spmm" executable. spmm accepts 1 or 2 arguments. In case of 1 argument it performs matrix squaring (A\*A). In case of 2 arguments it performs the matrix multiplication (A\*B).
 
-### example
-> ./spmm A.mtx
-or
+### examples
+> ./spmm A.mtx<br/>
 > ./spmm A.mtx B.mtx
 
 ## Troubleshooting
@@ -32,7 +31,7 @@ Running make a second time solves this issue.
 Orestis Zachariadis (orestis.zachariadis@uco.es)
 
 ## References
-O. Zachariadis, N. Satpute, J. Gómez-Luna, and J. Olivares, “Accelerating sparse matrix–matrix multiplication with GPU Tensor Cores,” Computers & Electrical Engineering, vol. 88, p. 106848, Dec. 2020, doi: 10.1016/j.compeleceng.2020.106848.
-[arXiv:](http://arxiv.org/abs/2009.14600)
+[1] O. Zachariadis, N. Satpute, J. Gómez-Luna, and J. Olivares, “Accelerating sparse matrix–matrix multiplication with GPU Tensor Cores,” Computers & Electrical Engineering, vol. 88, p. 106848, Dec. 2020, doi: 10.1016/j.compeleceng.2020.106848.<br/>
+Also in [arXiv](http://arxiv.org/abs/2009.14600).
 
 
