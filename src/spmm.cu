@@ -8,7 +8,6 @@
 #include <iostream>
 #include <stdlib.h>
 #include <stdio.h>
-#include <cusparse_v2.h>
 
 #include "cusp/timer.h"
 
@@ -39,24 +38,6 @@
 
 #include "mm.h"
 
-cusparseStatus_t status;
-cusparseHandle_t handle  = 0;
-cusparseMatDescr_t descrA = 0;
-cusparseMatDescr_t descrB = 0;
-cusparseMatDescr_t descrC = 0;
-
-
-#define CLEANUP(s)                                   \
-do {                                                 \
-    printf ("%s\n", s);                              \
-    if (descrA)              cusparseDestroyMatDescr(descrA);\
-    if (descrB)              cusparseDestroyMatDescr(descrB);\
-    if (descrC)              cusparseDestroyMatDescr(descrC);\
-    if (handle)             cusparseDestroy(handle); \
-    cudaDeviceReset();          \
-    fflush (stdout);                                 \
-} while (0)
-
 
 __global__ void warmup(float4 *output)
 {
@@ -64,43 +45,6 @@ __global__ void warmup(float4 *output)
 
     float4 value = make_float4(threadIdx.z/threadIdx.x, threadIdx.z*threadIdx.z, 3, threadIdx.y+threadIdx.x);
     output[tid] = value;
-}
-
-int cusparse_init(void)
-{
-    /* initialize cusparse library */
-    status = cusparseCreate(&handle);
-    if (status != CUSPARSE_STATUS_SUCCESS) {
-        CLEANUP("CUSPARSE Library initialization failed");
-        return 1;
-    }
-
-    /* create and setup matrix descriptor */
-    status = cusparseCreateMatDescr(&descrA);
-    if (status != CUSPARSE_STATUS_SUCCESS) {
-        CLEANUP("Matrix descriptor initialization failed");
-        return 1;
-    }
-    cusparseSetMatType(descrA,CUSPARSE_MATRIX_TYPE_GENERAL);
-    cusparseSetMatIndexBase(descrA,CUSPARSE_INDEX_BASE_ZERO);
-
-    status = cusparseCreateMatDescr(&descrB);
-    if (status != CUSPARSE_STATUS_SUCCESS) {
-        CLEANUP("Matrix descriptor initialization failed");
-        return 1;
-    }
-    cusparseSetMatType(descrB,CUSPARSE_MATRIX_TYPE_GENERAL);
-    cusparseSetMatIndexBase(descrB,CUSPARSE_INDEX_BASE_ZERO);
-
-    status = cusparseCreateMatDescr(&descrC);
-    if (status != CUSPARSE_STATUS_SUCCESS) {
-        CLEANUP("Matrix descriptor initialization failed");
-        return 1;
-    }
-    cusparseSetMatType(descrC,CUSPARSE_MATRIX_TYPE_GENERAL);
-    cusparseSetMatIndexBase(descrC,CUSPARSE_INDEX_BASE_ZERO);
-
-    return 0;
 }
 
 // I made this function because in CUSP in GPU version they don't compact the output. In CPU they do.
@@ -917,36 +861,6 @@ float time_spmmBMP_noTuple(const InputType& A_h, const InputType& B_h)
 }
 
 template <typename MatrixType, typename InputType>
-float time_spmm(const InputType& A,
-                const InputType& B)
-{
-    unsigned int N = REPETITIONS;
-
-    MatrixType A_;
-    MatrixType B_;
-
-    try
-    {
-        A_ = A;
-        B_ = B;
-    }
-    catch (cusp::format_conversion_exception)
-    {
-        return -1;
-    }
-
-    timer t;
-
-    for(unsigned int i = 0; i < N; i++)
-    {
-        MatrixType C_;
-        cusp::multiply(A_, B_, C_);
-    }
-
-    return t.milliseconds_elapsed() / N;
-}
-
-template <typename MatrixType, typename InputType>
 float time_spmmGPU(const InputType& A,
                 const InputType& B)
 {
@@ -981,101 +895,6 @@ float time_spmmGPU(const InputType& A,
     {
         MatrixType C_;
         cusp_multiplyGPU(A_, B_, C_);
-    }
-
-    float time_elapsed = t.milliseconds_elapsed();
-
-#if GPU_WARMUP
-    gpuErrchk(cudaFree(preheat));
-#endif
-
-    return time_elapsed / N;
-}
-
-
-template <typename MatrixType, typename InputType>
-float time_cusparse(const InputType& A,
-                    const InputType& B)
-{
-    if( cusparse_init() )
-    {
-	throw cusp::runtime_exception("CUSPARSE init failed");
-    }
-
-    typedef typename MatrixType::index_type IndexType;
-    typedef typename MatrixType::value_type ValueType;
-
-    unsigned int N = REPETITIONS;
-
-    int m = A.num_rows;
-    int n = A.num_cols;
-    int k = B.num_cols;
-    int nnzA = A.num_entries;
-    int nnzB = B.num_entries;
-
-    cusparseOperation_t transA = CUSPARSE_OPERATION_NON_TRANSPOSE;
-    cusparseOperation_t transB = CUSPARSE_OPERATION_NON_TRANSPOSE;
-
-    MatrixType A_(A);
-    MatrixType B_(B);
-
-    int * csrRowPtrA = thrust::raw_pointer_cast(&A_.row_offsets[0]);
-    int * csrColIndA = thrust::raw_pointer_cast(&A_.column_indices[0]);
-    float * csrValA  = thrust::raw_pointer_cast(&A_.values[0]);
-
-    int * csrRowPtrB = thrust::raw_pointer_cast(&B_.row_offsets[0]);
-    int * csrColIndB = thrust::raw_pointer_cast(&B_.column_indices[0]);
-    float * csrValB  = thrust::raw_pointer_cast(&B_.values[0]);
-
-    int * csrRowPtrC;
-    int * csrColIndC;
-    float * csrValC;
-
-#if GPU_WARMUP
-    float4* preheat;
-    const dim3 BP(8, 8, 4);
-    const dim3 GP(30, 30, 30);
-    gpuErrchk( cudaMalloc((void**)&preheat, BP.x*BP.y*BP.z*sizeof(float4)) );
-    for (int i = 0; i < 20000; ++i) {
-        warmup <<< GP, BP >>>(preheat);
-    }
-#endif
-
-    timer t;
-
-    for(unsigned int i = 0; i < N; i++)
-    {
-        int baseC, nnzC;
-        cudaMalloc((void**)&csrRowPtrC, sizeof(int)*(m+1));
-        status = cusparseXcsrgemmNnz(handle, transA, transB, m, n, k,
-                                     descrA, nnzA, csrRowPtrA, csrColIndA,
-                                     descrB, nnzB, csrRowPtrB, csrColIndB,
-                                     descrC, csrRowPtrC, &nnzC );
-        if (status != CUSPARSE_STATUS_SUCCESS) {
-            CLEANUP("CSR Matrix-Matrix multiplication failed");
-            return 1;
-        }
-        cudaMemcpy(&nnzC , csrRowPtrC+m, sizeof(int), cudaMemcpyDeviceToHost);
-        cudaMemcpy(&baseC, csrRowPtrC  , sizeof(int), cudaMemcpyDeviceToHost);
-        nnzC -= baseC;
-        cudaMalloc((void**)&csrColIndC, sizeof(int)*nnzC);
-        cudaMalloc((void**)&csrValC   , sizeof(float)*nnzC);
-        status = cusparseScsrgemm(handle, transA, transB, m, n, k,
-                                  descrA, nnzA,
-                                  csrValA, csrRowPtrA, csrColIndA,
-                                  descrB, nnzB,
-                                  csrValB, csrRowPtrB, csrColIndB,
-                                  descrC,
-                                  csrValC, csrRowPtrC, csrColIndC);
-
-        if (status != CUSPARSE_STATUS_SUCCESS) {
-            CLEANUP("CSR Matrix-Matrix multiplication failed");
-            return 1;
-        }
-
-        cudaFree(csrRowPtrC);
-        cudaFree(csrColIndC);
-        cudaFree(csrValC);
     }
 
     float time_elapsed = t.milliseconds_elapsed();
@@ -1135,7 +954,6 @@ int main(int argc, char ** argv)
     printf(" Bmp Device | %9.2f ms\n", time_spmmBMP_noTuple(A, B));
 
     printf("CUSP Device | %9.2f ms\n", time_spmmGPU<COODev>(A, B));
-    printf(" CUSPARSE   | %9.2f ms\n", time_cusparse<CSRDev>(A,B));
 
     return 0;
 }
